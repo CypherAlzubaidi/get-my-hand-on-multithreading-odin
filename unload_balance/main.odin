@@ -15,7 +15,7 @@ HeavyIter :: 1000
 ProbHeavyWork :: .05
 WorkerCount :: 4
 SubSize :: ChunkSize / WorkerCount
-
+SubsetSize :: 25
 Task :: struct {
 	val:    f64,
 	heavey: bool,
@@ -107,7 +107,7 @@ M_WaitForAllDone :: proc(mt: ^Master_thread) {
 ////////////////////////////////////////////////// Worker start //////////////////////////////////////////////////
 Worker :: struct {
 	master:      ^Master_thread,
-	thread:      thread.Thread,
+	thread:      ^thread.Thread,
 	mtx:         sync.Atomic_Mutex,
 	cv:          sync.Atomic_Cond,
 	dying:       bool,
@@ -115,18 +115,16 @@ Worker :: struct {
 	input:       []Task,
 }
 /*
-Init_Worker :: proc(worker: ^Worker) {
-	worker.dying = false
-	worker.accumlation = 0.0
-	}*/
+    Init_Worker :: proc(worker: ^Worker) {
+    	worker.dying = false
+    	worker.accumlation = 0.0
+    	}*/
 
-Set_Job :: proc(worker: ^Worker, data: []f64) {
+Set_Job :: proc(worker: ^Worker, data: []Task) {
 	sync.atomic_mutex_lock(&worker.mtx)
 	defer sync.atomic_mutex_unlock(&worker.mtx)
 
-	for i := 0; i < len(data); i += 1 {
-		worker.input[i].val = data[i]
-	}
+	copy_slice(worker.input, data)
 
 	sync.atomic_cond_signal(&worker.cv)
 }
@@ -145,7 +143,10 @@ Worker_ProcessData :: proc(worker: ^Worker) {
 	}
 }
 
-Run_Worker :: proc(worker: ^Worker) {
+Run_Worker :: proc(t: ^thread.Thread) {
+
+	worker := (cast(^Worker)t.data)
+
 	sync.atomic_mutex_lock(&worker.mtx)
 	defer sync.atomic_mutex_unlock(&worker.mtx)
 	for (true) {
@@ -172,14 +173,17 @@ Accumlate :: proc(arr: [dynamic]^Worker) -> f64 {
 	return result
 }
 
+
 DoTheWork :: proc() -> int {
 
 
 	tm: time.Stopwatch
 	chuncks := generate_data_sets()
 
+
 	time.stopwatch_start(&tm)
 
+	mctrl: Master_thread
 
 	worker_container := make([dynamic]^Worker, context.temp_allocator)
 
@@ -188,28 +192,56 @@ DoTheWork :: proc() -> int {
 		new_ptr.accumlation = 0.0
 		new_ptr.dying = false
 		new_ptr.master = &mctrl
+
+		new_thread := thread.create(Run_Worker)
+		new_ptr.thread = new_thread
+
+
 		append(&worker_container, new_ptr)
+
+		if new_ptr.thread != nil {
+			thread.start(new_ptr.thread)
+		}
+
 		//append(&worker_containe, Worker{dying = false, master = &mctrl, accumlation = 0.0})
 	}
 
-	for chunk in chuncks {
-		data: []f64
+	for &chunk in chuncks {
+		fmt.println("we start new chunk please be caution please :)")
 		start: int = 0
-		end: int = 25
-		for j := 0; j < len(chunk); j += 1 {
-			data[j] = chunk[j].val
-		}
+		sub_size: int = SubsetSize
+		input: [100]Task
+		//s: []Task = chunk[1:4] // creates a slice which includes elements 1 through 3
+
+
 		for i := 0; i < WorkerCount; i += 1 {
-			Set_Job(worker_container[i], data[start:end])
+			end := start + sub_size
+			Set_Job(worker_container[i], chunk[start:end])
 			start = end
-			end = end * 2
 		}
+
 		M_WaitForAllDone(&mctrl)
 	}
 	time.stopwatch_stop(&tm)
 	fmt.println(" processing took  : ", tm._accumulation)
+	result: f64 = 0.0
+	for worker in worker_container {
+		fmt.println("problme 4 ")
 
-	fmt.printfln("the outcome : ", Accumlate(worker_container))
+		result = result + worker.accumlation
+	}
+
+
+	fmt.printfln("the outcome : ", result)
+
+
+	for i := 0; i < WorkerCount; i += 1 {
+
+		if thread.is_done(worker_container[i].thread) {
+			thread.destroy(worker_container[i].thread)
+		}
+		//append(&worker_containe, Worker{dying = false, master = &mctrl, accumlation = 0.0})
+	}
 
 	free_all(context.temp_allocator)
 	return 0
@@ -222,4 +254,7 @@ DoTheWork :: proc() -> int {
 
 main :: proc() {
 	fmt.println("Hellope!")
+	DoTheWork()
+
+
 }
