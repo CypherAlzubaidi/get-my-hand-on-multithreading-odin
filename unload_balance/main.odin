@@ -82,7 +82,7 @@ M_DoneFlag :: proc(mt: ^Master_thread) {
 	sync.atomic_mutex_lock(&mt.mtx)
 	defer sync.atomic_mutex_unlock(&mt.mtx)
 
-	mt.done_count = +1
+	mt.done_count += 1
 
 	if mt.done_count == mt.worker_count {
 		//sync.atomic_cond_signal(&mt.cv)
@@ -96,7 +96,7 @@ M_DoneFlag :: proc(mt: ^Master_thread) {
 
 M_WaitForAllDone :: proc(mt: ^Master_thread) {
 	sync.atomic_mutex_lock(&mt.mtx)
-	defer sync.atomic_mutex_lock(&mt.mtx)
+	defer sync.atomic_mutex_unlock(&mt.mtx)
 
 	for (mt.done_count != mt.worker_count) {
 		sync.atomic_cond_wait(&mt.cv, &mt.mtx)
@@ -132,6 +132,7 @@ Set_Job :: proc(worker: ^Worker, data: []Task) {
 Kill :: proc(worker: ^Worker) {
 	sync.atomic_mutex_lock(&worker.mtx)
 	defer sync.atomic_mutex_unlock(&worker.mtx)
+	worker.dying = true
 	sync.atomic_cond_signal(&worker.cv)
 
 }
@@ -151,12 +152,15 @@ Run_Worker :: proc(t: ^thread.Thread) {
 	defer sync.atomic_mutex_unlock(&worker.mtx)
 	for (true) {
 		for (slice.is_empty(worker.input) || worker.dying) {
-
-			if (worker.dying) {
-				break
-			}
-
+			sync.atomic_cond_wait(&worker.cv, &worker.mtx)
 		}
+
+		if (worker.dying) {
+			break
+		}
+		Worker_ProcessData(worker)
+		worker.input = {}
+		M_DoneFlag(worker.master)
 	}
 
 }
