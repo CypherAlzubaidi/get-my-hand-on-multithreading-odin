@@ -22,6 +22,14 @@ Task :: struct {
 }
 
 
+/*
+
+to do list :
+
+1 solve false sharing
+
+*/
+
 process :: proc(is_heavy: bool, task_val: f64) -> f64 {
 
 	iter: int
@@ -100,8 +108,8 @@ M_WaitForAllDone :: proc(mt: ^Master_thread) {
 
 	for (mt.done_count != mt.worker_count) {
 		sync.atomic_cond_wait(&mt.cv, &mt.mtx)
-		mt.done_count = 0
 	}
+	mt.done_count = 0
 }
 
 ////////////////////////////////////////////////// Worker start //////////////////////////////////////////////////
@@ -124,7 +132,10 @@ Set_Job :: proc(worker: ^Worker, data: []Task) {
 	sync.atomic_mutex_lock(&worker.mtx)
 	defer sync.atomic_mutex_unlock(&worker.mtx)
 
+	worker.input = make([]Task, 25)
+
 	copy_slice(worker.input, data)
+
 
 	sync.atomic_cond_signal(&worker.cv)
 }
@@ -146,21 +157,27 @@ Worker_ProcessData :: proc(worker: ^Worker) {
 
 Run_Worker :: proc(t: ^thread.Thread) {
 
+	counter: int = 0
 	worker := (cast(^Worker)t.data)
-
 	sync.atomic_mutex_lock(&worker.mtx)
 	defer sync.atomic_mutex_unlock(&worker.mtx)
 	for (true) {
+		counter = counter + 1
 		for (slice.is_empty(worker.input) || worker.dying) {
 			sync.atomic_cond_wait(&worker.cv, &worker.mtx)
 		}
-
 		if (worker.dying) {
+
 			break
+
 		}
+
 		Worker_ProcessData(worker)
+
 		worker.input = {}
 		M_DoneFlag(worker.master)
+		fmt.println(worker.accumlation)
+
 	}
 
 }
@@ -188,7 +205,7 @@ DoTheWork :: proc() -> int {
 	time.stopwatch_start(&tm)
 
 	mctrl: Master_thread
-
+	Master_Init(&mctrl, 4)
 	worker_container := make([dynamic]^Worker, context.temp_allocator)
 
 	for i := 0; i < WorkerCount; i += 1 {
@@ -196,16 +213,12 @@ DoTheWork :: proc() -> int {
 		new_ptr.accumlation = 0.0
 		new_ptr.dying = false
 		new_ptr.master = &mctrl
-
 		new_thread := thread.create(Run_Worker)
+		new_thread.data = new_ptr
 		new_ptr.thread = new_thread
-
-
 		append(&worker_container, new_ptr)
 
-		if new_ptr.thread != nil {
-			thread.start(new_ptr.thread)
-		}
+		thread.start(new_ptr.thread)
 
 		//append(&worker_containe, Worker{dying = false, master = &mctrl, accumlation = 0.0})
 	}
@@ -229,14 +242,18 @@ DoTheWork :: proc() -> int {
 	time.stopwatch_stop(&tm)
 	fmt.println(" processing took  : ", tm._accumulation)
 	result: f64 = 0.0
+
 	for worker in worker_container {
-		fmt.println("problme 4 ")
 
 		result = result + worker.accumlation
 	}
 
+	fmt.println(" result is  : ", result)
 
-	fmt.printfln("the outcome : ", result)
+
+	for worker in worker_container {
+		Kill(worker)
+	}
 
 
 	for i := 0; i < WorkerCount; i += 1 {
@@ -257,8 +274,6 @@ DoTheWork :: proc() -> int {
 
 
 main :: proc() {
-	fmt.println("Hellope!")
+	//fmt.println("Hellope!")
 	DoTheWork()
-
-
 }
